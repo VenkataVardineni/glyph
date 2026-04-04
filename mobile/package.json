@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start --localhost",
-    "start:localhost": "expo start --localhost",
+    "start": "CI=false expo start --localhost",
+    "start:localhost": "CI=false expo start --localhost",
     "start:lan": "expo start --host lan",
     "start:tunnel": "expo start --tunnel",
     "android": "expo run:android",
