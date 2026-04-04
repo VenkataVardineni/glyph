@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Env (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+*.log
+.cursor/
+
+# Mobile (Expo / RN)
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+mobile/ios/
+mobile/android/
+mobile/.kotlin/
+mobile/.metro-health-check*
+
+# Server
+server/dist/
+
+# Secrets / certs
+*.pem
+*.p12
+*.key
+*.mobileprovision
