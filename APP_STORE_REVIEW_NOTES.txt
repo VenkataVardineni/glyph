@@ -1,0 +1,47 @@
+Glyph — App Review Notes (paste into App Store Connect → App Review Information → Notes)
+
+------------------------------------------------------------
+1.2 USER-GENERATED CONTENT (SAFETY)
+------------------------------------------------------------
+Glyph is an AR / spatial drawing and live video communication app. To comply with Guideline 1.2:
+
+• Report: A REPORT control is visible on the active call screen and sends structured reports (reporter ID, reported user ID, match ID, reason) to our backend queue for human triage.
+• Block: A BLOCK control is on the same screen. Blocking persists server-side (Redis in production) and in the client’s local list; matchmaking excludes blocked pairs and honors client-supplied exclude lists.
+• EULA: Users must accept an in-app EULA that includes explicit ZERO TOLERANCE language for objectionable content and abusive users (versioned acceptance stored on device). Host the full EULA at your public URL and link it from the app (Settings + onboarding).
+• Moderator workflow: Operators use HTTPS admin tools on the signal server:
+  - GET  https://<YOUR_HOST>/admin/dashboard  (HTML console)
+  - GET  https://<YOUR_HOST>/admin/api/reports  (Bearer ADMIN_TOKEN)
+  - POST https://<YOUR_HOST>/admin/api/ban    JSON { "userId": "..." } (Bearer ADMIN_TOKEN)
+  Target SLA: triage reports and ban abusive accounts within 24 hours.
+• Active filtering: Real-time hooks are implemented for (1) periodic video-frame moderation callbacks and (2) audio / transcript moderation callbacks. Production builds must attach your CV and NLP models to scoreVisualSafety / scoreAudioSafety in server/src/index.ts. Review Notes should state that objectionable content triggers blur, disconnect, and reporting as implemented.
+
+------------------------------------------------------------
+PRIVACY / PERMISSIONS
+------------------------------------------------------------
+• NSCameraUsageDescription explains AR hand / drawing and sharing video with a match.
+• NSMicrophoneUsageDescription explains voice chat with a match.
+• Privacy Policy must be hosted at the URL set in EXPO_PUBLIC_PRIVACY_POLICY_URL (see Settings → Privacy Policy).
+• App Tracking Transparency: The app only calls the ATT API when EXPO_PUBLIC_REQUEST_APPLE_TRACKING=1. Default shipping configuration does NOT request tracking.
+
+------------------------------------------------------------
+PERFORMANCE / NETWORK (2.5)
+------------------------------------------------------------
+• Profile thermal and memory with 30+ minute calls (see docs/PERFORMANCE_QA_CHECKLIST.md).
+• Signal server listens on IPv6 dual-stack (host "::") for Apple’s IPv6-only review environment; deploy on a host with AAAA DNS and ensure TURN/STUN support IPv6 if used.
+
+------------------------------------------------------------
+DEMO ACCOUNT
+------------------------------------------------------------
+Configure the signal server:
+  REVIEW_DEMO_USERNAME=...
+  REVIEW_DEMO_PASSWORD=...
+  REVIEW_DEMO_USER_ID=glyph-apple-review   (optional)
+
+In the app: Sign-in → “App Review sign-in” → enter the same credentials.
+Also paste those credentials into App Store Connect → App Review Information.
+
+------------------------------------------------------------
+AGE RATING / SCREENSHOTS
+------------------------------------------------------------
+• Expect 17+ if offering random / stranger matching; confirm with your legal counsel and App Store Connect questionnaire.
+• Screenshots must reflect the real UI (see legal/AGE_RATING_AND_SCREENSHOTS.txt).

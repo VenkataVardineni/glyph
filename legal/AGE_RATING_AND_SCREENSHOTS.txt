@@ -1,0 +1,12 @@
+App Store Connect — Age rating & screenshots (Glyph)
+======================================================
+
+AGE RATING
+----------
+Random / stranger live video with UGC typically maps to a higher age band (often 17+ in the US questionnaire), especially if content is user-generated and not fully pre-moderated before display. Answer the ASC questionnaire honestly based on your shipped safety model. Legal counsel recommended.
+
+SCREENSHOTS (Guideline 2.3)
+----------------------------
+• Use captures from real builds (simulator or device). Do not use misleading pre-rendered marketing art that does not match the UI.
+• Show: onboarding / safety / EULA acceptance, lobby, active call with Report + Block visible, drawing overlay if applicable.
+• If “Wave to unblur” is on, you may show blurred video in screenshots to match actual behavior.

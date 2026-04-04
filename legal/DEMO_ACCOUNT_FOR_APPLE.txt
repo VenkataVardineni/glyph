@@ -1,0 +1,23 @@
+App Store Connect — Demo / Review account (Glyph)
+==================================================
+
+1) Deploy the signal server (server/) with environment variables:
+
+   REVIEW_DEMO_USERNAME=apple_review_glyph
+   REVIEW_DEMO_PASSWORD=<generate a strong password>
+   REVIEW_DEMO_USER_ID=glyph-apple-review
+
+   Optional production:
+   ADMIN_TOKEN=<long random secret>
+   REDIS_URL=<your redis>   # recommended so reports/blocks/bans survive restarts
+
+2) In App Store Connect → App Review Information, provide:
+
+   Username: (same as REVIEW_DEMO_USERNAME)
+   Password: (same as REVIEW_DEMO_PASSWORD)
+
+3) On device, open Glyph → Sign-in → expand “App Review sign-in” → enter those credentials.
+
+4) Ensure EXPO_PUBLIC_SERVER_URL points to the same server instance the reviewer will reach (HTTPS in production).
+
+5) Ban test: after review, rotate REVIEW_DEMO_PASSWORD and ADMIN_TOKEN.
