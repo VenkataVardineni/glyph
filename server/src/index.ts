@@ -1,16 +1,27 @@
 import { randomUUID } from "node:crypto";
-import Fastify from "fastify";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
+import Fastify from "fastify";
 import { Redis } from "ioredis";
 import { Server, Socket } from "socket.io";
+import { z } from "zod";
 import { adminDashboardHtml } from "./adminDashboard.js";
+import { findPeer, queueKey, type QueuedUser } from "./matchmaking.js";
+import { addBlock, banUser, isUserBanned, loadBannedFromRedis } from "./safety.js";
 import {
-  addBlock,
-  areUsersBlockedPair,
-  banUser,
-  isUserBanned,
-  loadBannedFromRedis,
-} from "./safety.js";
+  authenticateSchema,
+  blockUserSchema,
+  icebreakerRequestSchema,
+  joinQueueSchema,
+  moderationAudioSchema,
+  moderationFrameSchema,
+  reportSchema,
+  signalSchema,
+  strokeSchema,
+  validationErrorMessage,
+  waveReadySchema,
+} from "./validation/socketSchemas.js";
 
 const PORT = Number(process.env.PORT) || 3001;
 const REDIS_URL = process.env.REDIS_URL;
@@ -18,20 +29,10 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const REVIEW_DEMO_USERNAME = process.env.REVIEW_DEMO_USERNAME ?? "";
 const REVIEW_DEMO_PASSWORD = process.env.REVIEW_DEMO_PASSWORD ?? "";
 const REVIEW_DEMO_USER_ID = process.env.REVIEW_DEMO_USER_ID ?? "glyph-apple-review";
+const SERVER_STARTED_AT = Date.now();
 
-type MatchPrefs = {
-  tags: string[];
-  language: string;
-  drawingOnly: boolean;
-  userId: string;
-  /** Client hint: never match these user IDs (e.g. locally blocked before server sync). */
-  excludeUserIds?: string[];
-};
-
-type QueuedUser = MatchPrefs & {
-  socketId: string;
-  joinedAt: number;
-};
+/** Comma-separated origins for CORS; default true (reflect request origin). */
+const CORS_ORIGIN_RAW = process.env.CORS_ORIGIN?.trim();
 
 type ActiveMatch = {
   id: string;
@@ -42,60 +43,10 @@ type ActiveMatch = {
   createdAt: number;
 };
 
-function queueKey(prefs: MatchPrefs): string {
-  const tagPart =
-    prefs.tags.length > 0
-      ? [...prefs.tags].sort().join(",").slice(0, 120)
-      : "_open";
-  return `${prefs.language}|${prefs.drawingOnly ? "draw" : "full"}|${tagPart}`;
-}
-
-function tagScore(a: string[], b: string[]): number {
-  if (a.length === 0 || b.length === 0) return 0;
-  const setB = new Set(b.map((t) => t.toLowerCase()));
-  return a.filter((t) => setB.has(t.toLowerCase())).length;
-}
-
-async function findPeer(
-  queue: Map<string, QueuedUser[]>,
-  incoming: QueuedUser,
-  redis: Redis | null
-): Promise<QueuedUser | null> {
-  const key = queueKey(incoming);
-  const bucket = queue.get(key) ?? [];
-  if (bucket.length === 0) {
-    queue.set(key, bucket);
-    return null;
-  }
-  let bestIdx = -1;
-  let bestScore = -1;
-  for (let i = 0; i < bucket.length; i++) {
-    const cand = bucket[i];
-    if (cand.socketId === incoming.socketId || cand.userId === incoming.userId) continue;
-    if (incoming.excludeUserIds?.includes(cand.userId)) continue;
-    if (cand.excludeUserIds?.includes(incoming.userId)) continue;
-    if (await areUsersBlockedPair(incoming.userId, cand.userId, redis)) continue;
-    const s = tagScore(incoming.tags, cand.tags);
-    if (s > bestScore) {
-      bestScore = s;
-      bestIdx = i;
-    }
-  }
-  if (bestIdx < 0) {
-    for (let i = 0; i < bucket.length; i++) {
-      const cand = bucket[i];
-      if (cand.socketId === incoming.socketId || cand.userId === incoming.userId) continue;
-      if (incoming.excludeUserIds?.includes(cand.userId)) continue;
-      if (cand.excludeUserIds?.includes(incoming.userId)) continue;
-      if (await areUsersBlockedPair(incoming.userId, cand.userId, redis)) continue;
-      bestIdx = i;
-      break;
-    }
-  }
-  if (bestIdx < 0) return null;
-  const [peer] = bucket.splice(bestIdx, 1);
-  if (bucket.length === 0) queue.delete(key);
-  return peer;
+function parsePayload<T>(schema: z.ZodSchema<T>, raw: unknown): { ok: true; data: T } | { ok: false; msg: string } {
+  const r = schema.safeParse(raw);
+  if (r.success) return { ok: true, data: r.data };
+  return { ok: false, msg: validationErrorMessage(r.error) };
 }
 
 function peerUserIdForSocket(m: ActiveMatch, socketId: string): string | null {
@@ -104,10 +55,26 @@ function peerUserIdForSocket(m: ActiveMatch, socketId: string): string | null {
   return null;
 }
 
-const app = Fastify({ logger: true });
-await app.register(cors, { origin: true });
+function resolveCorsOrigin(): boolean | string[] {
+  if (!CORS_ORIGIN_RAW || CORS_ORIGIN_RAW === "*") return true;
+  const list = CORS_ORIGIN_RAW.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return list.length ? list : true;
+}
 
-app.get("/health", async () => ({ ok: true, service: "glyph-signal" }));
+const corsOrigin = resolveCorsOrigin();
+
+const app = Fastify({ logger: true });
+await app.register(helmet, { contentSecurityPolicy: false });
+await app.register(rateLimit, { max: 240, timeWindow: "1 minute" });
+await app.register(cors, { origin: corsOrigin });
+
+app.get("/health", async () => ({
+  ok: true,
+  service: "glyph-signal",
+  uptimeMs: Date.now() - SERVER_STARTED_AT,
+}));
 
 app.post<{
   Body: { username?: string; password?: string };
@@ -255,7 +222,7 @@ app.get("/stats", async () => ({
 
 await app.ready();
 io = new Server(app.server, {
-  cors: { origin: true, methods: ["GET", "POST"] },
+  cors: { origin: corsOrigin, methods: ["GET", "POST"] },
   transports: ["websocket", "polling"],
 });
 
@@ -268,8 +235,14 @@ io.on("connection", (socket: Socket) => {
 
   socket.on(
     "authenticate",
-    async (msg: { userId?: string }, cb?: (r: { ok: boolean; code?: string }) => void) => {
-      const userId = msg?.userId?.trim() || randomUUID();
+    async (msg: unknown, cb?: (r: { ok: boolean; code?: string }) => void) => {
+      const parsed = parsePayload(authenticateSchema, msg);
+      if (!parsed.ok) {
+        socket.emit("error_msg", { code: "VALIDATION", message: parsed.msg });
+        cb?.({ ok: false, code: "VALIDATION" });
+        return;
+      }
+      const userId = parsed.data.userId?.trim() || randomUUID();
       if (await isUserBanned(userId, redis)) {
         socket.emit("auth_error", { code: "BANNED" });
         cb?.({ ok: false, code: "BANNED" });
@@ -285,12 +258,18 @@ io.on("connection", (socket: Socket) => {
     }
   );
 
-  socket.on("join_queue", async (prefs: MatchPrefs) => {
+  socket.on("join_queue", async (prefsRaw: unknown) => {
     const userId = socketToUser.get(socket.id);
     if (!userId) {
       socket.emit("error_msg", { code: "AUTH", message: "Authenticate first" });
       return;
     }
+    const parsed = parsePayload(joinQueueSchema, prefsRaw);
+    if (!parsed.ok) {
+      socket.emit("error_msg", { code: "VALIDATION", message: parsed.msg });
+      return;
+    }
+    const prefs = parsed.data;
     if (await isUserBanned(userId, redis)) {
       socket.emit("auth_error", { code: "BANNED" });
       socket.disconnect(true);
@@ -350,55 +329,51 @@ io.on("connection", (socket: Socket) => {
     socket.emit("queue_status", { position: 0 });
   });
 
-  socket.on(
-    "signal",
-    (msg: { matchId: string; type: string; sdp?: string; candidate?: unknown }) => {
-      const mid = socketToMatch.get(socket.id);
-      if (!mid || mid !== msg.matchId) return;
-      const m = matches.get(mid);
-      if (!m) return;
-      const peer = peerSocketId(m, socket.id);
-      if (!peer) return;
-      emitToSocket(peer, "signal", { ...msg, from: socket.id });
-    }
-  );
+  socket.on("signal", (msgRaw: unknown) => {
+    const p = parsePayload(signalSchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
+    const mid = socketToMatch.get(socket.id);
+    if (!mid || mid !== msg.matchId) return;
+    const m = matches.get(mid);
+    if (!m) return;
+    const peer = peerSocketId(m, socket.id);
+    if (!peer) return;
+    emitToSocket(peer, "signal", { ...msg, from: socket.id });
+  });
 
-  socket.on(
-    "stroke",
-    (msg: {
-      matchId: string;
-      strokeId: string;
-      points: { x: number; y: number }[];
-      color: string;
-      width: number;
-      brush: string;
-    }) => {
-      const mid = socketToMatch.get(socket.id);
-      if (!mid || mid !== msg.matchId) return;
-      const m = matches.get(mid);
-      if (!m) return;
-      const peer = peerSocketId(m, socket.id);
-      if (!peer) return;
-      emitToSocket(peer, "stroke", msg);
-    }
-  );
+  socket.on("stroke", (msgRaw: unknown) => {
+    const p = parsePayload(strokeSchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
+    const mid = socketToMatch.get(socket.id);
+    if (!mid || mid !== msg.matchId) return;
+    const m = matches.get(mid);
+    if (!m) return;
+    const peer = peerSocketId(m, socket.id);
+    if (!peer) return;
+    emitToSocket(peer, "stroke", msg);
+  });
 
-  socket.on(
-    "wave_ready",
-    (msg: { matchId: string; ready: boolean }, cb?: () => void) => {
-      const mid = socketToMatch.get(socket.id);
-      if (!mid || mid !== msg.matchId) return;
-      const m = matches.get(mid);
-      if (!m) return;
-      const peer = peerSocketId(m, socket.id);
-      if (peer) emitToSocket(peer, "peer_wave", { ready: msg.ready });
-      cb?.();
-    }
-  );
+  socket.on("wave_ready", (msgRaw: unknown, cb?: () => void) => {
+    const p = parsePayload(waveReadySchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
+    const mid = socketToMatch.get(socket.id);
+    if (!mid || mid !== msg.matchId) return;
+    const m = matches.get(mid);
+    if (!m) return;
+    const peer = peerSocketId(m, socket.id);
+    if (peer) emitToSocket(peer, "peer_wave", { ready: msg.ready });
+    cb?.();
+  });
 
-  socket.on("block_user", async (msg: { matchId: string; peerUserId: string }) => {
+  socket.on("block_user", async (msgRaw: unknown) => {
+    const p = parsePayload(blockUserSchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
     const myId = socketToUser.get(socket.id);
-    if (!myId || !msg.peerUserId) return;
+    if (!myId) return;
     const mid = socketToMatch.get(socket.id);
     if (!mid || mid !== msg.matchId) return;
     const m = matches.get(mid);
@@ -420,7 +395,10 @@ io.on("connection", (socket: Socket) => {
     socket.emit("blocked_ok", { peerUserId: msg.peerUserId });
   });
 
-  socket.on("icebreaker_request", (msg: { matchId: string }) => {
+  socket.on("icebreaker_request", (msgRaw: unknown) => {
+    const p = parsePayload(icebreakerRequestSchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
     const mid = socketToMatch.get(socket.id);
     if (!mid || mid !== msg.matchId) return;
     const prompts = [
@@ -439,9 +417,15 @@ io.on("connection", (socket: Socket) => {
   socket.on(
     "moderation_frame",
     async (
-      msg: { frameId: string },
+      msgRaw: unknown,
       cb?: (r: { safe: boolean; action: "none" | "blur" | "disconnect" }) => void
     ) => {
+      const p = parsePayload(moderationFrameSchema, msgRaw);
+      if (!p.ok) {
+        cb?.({ safe: true, action: "none" });
+        return;
+      }
+      const msg = p.data;
       const userId = socketToUser.get(socket.id) ?? "anon";
       const res = await scoreVisualSafety({ userId, frameId: msg.frameId });
       const action = !res.safe
@@ -468,44 +452,40 @@ io.on("connection", (socket: Socket) => {
 
   socket.on(
     "moderation_audio",
-    async (
-      msg: { text: string },
-      cb?: (r: { safe: boolean; warn: boolean }) => void
-    ) => {
+    async (msgRaw: unknown, cb?: (r: { safe: boolean; warn: boolean }) => void) => {
+      const p = parsePayload(moderationAudioSchema, msgRaw);
+      if (!p.ok) {
+        cb?.({ safe: true, warn: false });
+        return;
+      }
+      const msg = p.data;
       const userId = socketToUser.get(socket.id) ?? "anon";
       const res = await scoreAudioSafety({ userId, transcriptSnippet: msg.text });
       cb?.({ safe: res.safe, warn: !res.safe });
     }
   );
 
-  socket.on(
-    "report",
-    (msg: {
-      matchId?: string;
-      reason: string;
-      reportedUserId?: string;
-    }) => {
-      const reporterUserId = socketToUser.get(socket.id);
-      const mid = msg.matchId ?? socketToMatch.get(socket.id);
-      let reportedUserId = msg.reportedUserId;
-      if (!reportedUserId && mid) {
-        const m = matches.get(mid);
-        if (m) reportedUserId = peerUserIdForSocket(m, socket.id) ?? undefined;
-      }
-      app.log.warn(
-        { socket: socket.id, reporterUserId, reportedUserId, ...msg },
-        "user_report"
-      );
-      void pushReport({
-        at: Date.now(),
-        reporterUserId,
-        reportedUserId,
-        matchId: mid,
-        reason: msg.reason,
-        socketId: socket.id,
-      });
+  socket.on("report", (msgRaw: unknown) => {
+    const p = parsePayload(reportSchema, msgRaw);
+    if (!p.ok) return;
+    const msg = p.data;
+    const reporterUserId = socketToUser.get(socket.id);
+    const mid = msg.matchId ?? socketToMatch.get(socket.id);
+    let reportedUserId = msg.reportedUserId;
+    if (!reportedUserId && mid) {
+      const m = matches.get(mid);
+      if (m) reportedUserId = peerUserIdForSocket(m, socket.id) ?? undefined;
     }
-  );
+    app.log.warn({ socket: socket.id, reporterUserId, reportedUserId, ...msg }, "user_report");
+    void pushReport({
+      at: Date.now(),
+      reporterUserId,
+      reportedUserId,
+      matchId: mid,
+      reason: msg.reason,
+      socketId: socket.id,
+    });
+  });
 
   socket.on("disconnect_match", () => {
     const mid = socketToMatch.get(socket.id);
@@ -554,6 +534,30 @@ function kickSocketsForUser(userId: string, reason: string) {
     }
   }
 }
+
+async function shutdown(signal: string) {
+  app.log.info({ signal }, "glyph_shutdown_begin");
+  try {
+    io.disconnectSockets(true);
+    await new Promise<void>((resolve, reject) => {
+      io.close((err) => (err ? reject(err) : resolve()));
+    });
+  } catch (e) {
+    app.log.error({ err: e }, "glyph_io_close");
+  }
+  if (redis) {
+    try {
+      await redis.quit();
+    } catch (e) {
+      app.log.error({ err: e }, "glyph_redis_quit");
+    }
+  }
+  await app.close();
+  process.exit(0);
+}
+
+process.once("SIGINT", () => void shutdown("SIGINT"));
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
 /** Dual-stack: IPv6 (Apple review) + IPv4 where supported. */
 await app.listen({ port: PORT, host: "::" });
