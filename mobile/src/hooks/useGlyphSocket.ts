@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
+import { SocketEvents } from "../constants/socketEvents";
 import { getServerUrl } from "../lib/config";
+import { fetchOnlineCount } from "../lib/pollServerStats";
 import { useDrawingStore } from "../stores/drawingStore";
 import { useMatchStore } from "../stores/matchStore";
 import { useSessionStore } from "../stores/sessionStore";
@@ -18,6 +20,10 @@ export function useGlyphSocket(enabled: boolean) {
     const socket = io(url, {
       transports: ["websocket", "polling"],
       reconnection: true,
+      reconnectionAttempts: 14,
+      reconnectionDelay: 800,
+      reconnectionDelayMax: 20000,
+      timeout: 20000,
     });
     socketRef.current = socket;
     setSocket(socket);
@@ -31,7 +37,7 @@ export function useGlyphSocket(enabled: boolean) {
     socket.on("connect", () => {
       useMatchStore.getState().setConnected(true);
       socket.emit(
-        "authenticate",
+        SocketEvents.authenticate,
         { userId },
         (r?: { ok?: boolean; code?: string }) => {
           if (r?.ok === false && r?.code === "BANNED") kickBanned();
@@ -43,18 +49,18 @@ export function useGlyphSocket(enabled: boolean) {
       useMatchStore.getState().setConnected(false);
     });
 
-    socket.on("authenticated", () => undefined);
+    socket.on(SocketEvents.authenticated, () => undefined);
 
-    socket.on("auth_error", (msg: { code?: string }) => {
+    socket.on(SocketEvents.authError, (msg: { code?: string }) => {
       if (msg?.code === "BANNED") kickBanned();
     });
 
-    socket.on("queue_status", (msg: { position: number }) => {
+    socket.on(SocketEvents.queueStatus, (msg: { position: number }) => {
       useMatchStore.getState().setQueuePosition(msg.position);
     });
 
     socket.on(
-      "matched",
+      SocketEvents.matched,
       (msg: {
         matchId: string;
         isOfferer: boolean;
@@ -71,16 +77,16 @@ export function useGlyphSocket(enabled: boolean) {
       }
     );
 
-    socket.on("peer_wave", (msg: { ready: boolean }) => {
+    socket.on(SocketEvents.peerWave, (msg: { ready: boolean }) => {
       useMatchStore.getState().setRemoteWave(msg.ready);
     });
 
-    socket.on("icebreaker", (msg: { text: string }) => {
+    socket.on(SocketEvents.icebreaker, (msg: { text: string }) => {
       useMatchStore.getState().setIcebreaker(msg.text);
     });
 
     socket.on(
-      "stroke",
+      SocketEvents.stroke,
       (msg: {
         matchId: string;
         strokeId: string;
@@ -99,37 +105,21 @@ export function useGlyphSocket(enabled: boolean) {
       }
     );
 
-    socket.on("peer_disconnected", () => {
+    socket.on(SocketEvents.peerDisconnected, () => {
       useMatchStore.getState().resetMatchUi();
       useDrawingStore.getState().clearAll();
     });
 
-    socket.on("moderation_violation", () => {
+    socket.on(SocketEvents.moderationViolation, () => {
       useMatchStore.getState().setModerationBlur(true);
     });
 
-    socket.on("blocked_ok", (msg: { peerUserId: string }) => {
+    socket.on(SocketEvents.blockedOk, (msg: { peerUserId: string }) => {
       void useSessionStore.getState().addBlockedUserId(msg.peerUserId);
     });
 
-    const poll = setInterval(async () => {
-      try {
-        const res = await fetch(`${url}/stats`);
-        const j = (await res.json()) as { online?: number };
-        if (typeof j.online === "number") useMatchStore.getState().setOnlineHint(j.online);
-      } catch {
-        /* ignore */
-      }
-    }, 15000);
-    void (async () => {
-      try {
-        const res = await fetch(`${url}/stats`);
-        const j = (await res.json()) as { online?: number };
-        if (typeof j.online === "number") useMatchStore.getState().setOnlineHint(j.online);
-      } catch {
-        /* ignore */
-      }
-    })();
+    const poll = setInterval(() => void fetchOnlineCount(), 15000);
+    void fetchOnlineCount();
 
     return () => {
       clearInterval(poll);
