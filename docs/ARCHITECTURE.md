@@ -1,22 +1,49 @@
-# Architecture (high level)
+# Architecture
+
+## System diagram
 
 ```mermaid
-flowchart LR
-  subgraph client [Expo app]
-    Lobby[Lobby / queue]
-    Canvas[Canvas + WebRTC]
-    Lobby --> Canvas
+flowchart TB
+  subgraph mobile [Expo React Native]
+    Router[Expo Router]
+    Lobby[Lobby + CameraView]
+    Canvas[Canvas + WebRTC + Drawing]
+    Stores[Zustand stores]
+    Router --> Lobby
+    Router --> Canvas
+    Lobby --> Stores
+    Canvas --> Stores
   end
-  subgraph server [Node server]
-    IO[Socket.IO]
-    HTTP[Fastify HTTP]
+  subgraph node [Node 20 server]
+    Fastify[Fastify HTTP]
+    SIO[Socket.IO]
+    Match[matchmaking.ts]
+    Safe[safety.ts]
+    Val[validation/socketSchemas.ts]
+    SIO --> Match
+    SIO --> Safe
+    SIO --> Val
+    Fastify --> SIO
   end
-  client <-->|match, signal, safety| IO
-  client -->|optional REST| HTTP
+  subgraph data [Optional]
+    Redis[(Redis)]
+  end
+  mobile <-->|WebSocket + REST| node
+  Safe <--> Redis
 ```
 
-- **Lobby:** `join_queue` / `leave_queue`; server pairs clients and emits `matched` with `matchId` and offerer flag.
-- **Canvas:** WebRTC signaling over the same socket (`offer` / `answer` / `candidate`). TURN/STUN live in `mobile/src/lib/webrtc.ts`.
-- **Safety:** report/block/ban paths and moderation stubs are shared between UI and server; admin routes are gated by `ADMIN_TOKEN`.
+## How pieces fit
 
-For deployment, run the server with a public URL/WSS and set `EXPO_PUBLIC_SERVER_URL` for production mobile builds.
+1. **HTTP (`Fastify`)** — `/health`, `/stats`, review login, admin HTML + JSON APIs. Registered **before** `app.ready()` where required so route order stays valid.
+2. **Socket.IO** — Shares the Fastify HTTP server. CORS mirrors the Fastify `@fastify/cors` policy (`CORS_ORIGIN` or permissive default for dev).
+3. **Matchmaking** — Pure functions + async peer lookup in `matchmaking.ts`. Queues are in-memory maps keyed by language, camera mode, and sorted tags.
+4. **Safety** — Blocks and bans use Redis sets when `REDIS_URL` is set; otherwise in-memory (development only).
+5. **Mobile** — `useGlyphSocket` owns the client socket lifecycle; `useGlyphCall` runs WebRTC after `matched`. Drawing uses a normalized stroke message over the same socket.
+
+## Deployment notes
+
+- Terminate TLS at your edge; expose **WSS** to the app. Set `EXPO_PUBLIC_SERVER_URL` to `https://host:port` for production builds.
+- Run **Redis** for multi-instance consistency (`docker-compose.yml` provides a single-node profile).
+- Set **`CORS_ORIGIN`** to your web origins if you add a web client; mobile native clients are not subject to browser CORS.
+
+See also [USER_FLOW.md](./USER_FLOW.md), [FEATURES.md](./FEATURES.md), and [SOCKET_API.md](./SOCKET_API.md).
