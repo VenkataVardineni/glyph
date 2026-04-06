@@ -98,17 +98,27 @@ export default function LobbyScreen() {
             mirror
             mode="video"
             active={cameraActive}
-            onMountError={({ nativeEvent }) => setCamMountError(nativeEvent.message)}
+            onMountError={(e) => setCamMountError(e.message)}
           />
         ) : (
-          <Pressable style={[StyleSheet.absoluteFill, styles.noCam]} onPress={() => void request()}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Allow camera access"
+            style={[StyleSheet.absoluteFill, styles.noCam]}
+            onPress={() => void request()}
+          >
             <Text style={styles.noCamHint}>
               {permBlocked
                 ? "Camera access is off for Glyph. Open Settings to turn it on."
                 : "Tap to allow camera — you’ll see your preview behind the lobby."}
             </Text>
             {permBlocked ? (
-              <Pressable style={styles.settingsBtn} onPress={() => void Linking.openSettings()}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open system settings"
+                style={styles.settingsBtn}
+                onPress={() => void Linking.openSettings()}
+              >
                 <Text style={styles.settingsBtnText}>Open Settings</Text>
               </Pressable>
             ) : null}
@@ -122,7 +132,12 @@ export default function LobbyScreen() {
       />
 
       <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.push("/(main)/glyphs")} style={styles.iconBtn}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open glyphs gallery"
+          onPress={() => router.push("/(main)/glyphs")}
+          style={styles.iconBtn}
+        >
           <Text style={styles.iconTxt}>◇</Text>
         </Pressable>
         <View style={styles.onlinePill}>
@@ -130,7 +145,12 @@ export default function LobbyScreen() {
             {connected ? `Live · ${onlineHint || "—"} sockets` : "Connecting…"}
           </Text>
         </View>
-        <Pressable onPress={() => router.push("/(main)/settings")} style={styles.iconBtn}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open settings"
+          onPress={() => router.push("/(main)/settings")}
+          style={styles.iconBtn}
+        >
           <Text style={styles.iconTxt}>⚙</Text>
         </Pressable>
       </View>
@@ -155,12 +175,22 @@ export default function LobbyScreen() {
             <Text style={styles.queueBody}>
               Queue #{queuePosition || 1} · bias: {language} · {drawingOnly ? "drawing" : "full"} cam
             </Text>
-            <Pressable style={styles.secondary} onPress={cancel}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cancel matchmaking"
+              style={styles.secondary}
+              onPress={cancel}
+            >
               <Text style={styles.secondaryText}>Cancel</Text>
             </Pressable>
           </View>
         ) : (
-          <Pressable style={styles.voidBtn} onPress={connect}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Connect and join matchmaking queue"
+            style={styles.voidBtn}
+            onPress={connect}
+          >
             <LinearGradient colors={["#7c3aed", "#22d3ee"]} style={styles.voidGrad}>
               <Text style={styles.voidTxt}>Connect</Text>
             </LinearGradient>
