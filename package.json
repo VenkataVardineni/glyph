@@ -1,0 +1,10 @@
+{
+  "name": "glyph",
+  "private": true,
+  "description": "Glyph monorepo — see README.md",
+  "scripts": {
+    "server": "npm run dev --prefix server",
+    "mobile": "npm start --prefix mobile",
+    "test:server": "npm test --prefix server"
+  }
+}
